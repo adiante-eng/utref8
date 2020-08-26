@@ -1,4 +1,7 @@
-out
-node_modules
+.nyc_output/
+.vscode-test/
 client/server
-.vscode-test
+coverage/
+node_modules/
+out/
+reports/

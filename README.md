@@ -32,7 +32,7 @@ It also includes an End-to-End test.
 - Run `yarn` in this folder to install all necessary node modules in both the
   client and server folder
 - Open VS Code on this folder.
-- Press Ctrl+Shift+B to compile the client and server.
+- Press Ctrl+Shift+B to build the client and server.
 - Switch to the Debug viewlet.
 - Select `Launch Client` from the drop down.
 - Run the launch config.

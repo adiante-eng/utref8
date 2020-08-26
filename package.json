@@ -46,23 +46,31 @@
     }
   },
   "scripts": {
-    "compile": "tsc -b",
+    "build": "tsc -b",
     "postinstall": "yarn --cwd client && yarn --cwd server",
     "prettier": "prettier --write .",
-    "test": "sh ./scripts/e2e.sh",
-    "vscode:prepublish": "yarn compile",
+    "test:e2e": "sh ./scripts/e2e.sh",
+    "test:server": "mocha --require ts-node/register 'server/src/**/*.{spec.ts, spec.js, test.ts, test.js}'",
+    "test:server-watch": "mocha --require ts-node/register 'server/src/**/*.{spec.ts, spec.js, test.ts, test.js}' --watch --watch-files 'server/src/**/*.{js, ts}' --reporter min",
+    "test:server-report": "nyc --reporter=html --reporter=text mocha --require ts-node/register 'server/src/**/*.{spec.ts, spec.js, test.ts, test.js}' --reporter mochawesome --reporter-options reportDir=reports",
+    "vscode:prepublish": "yarn build",
     "watch": "tsc -b -w"
   },
   "devDependencies": {
+    "@types/chai": "^4.2.12",
     "@types/mocha": "^8.0.3",
     "@types/node": "^14.6.0",
     "@typescript-eslint/eslint-plugin": "^3.10.1",
     "@typescript-eslint/parser": "^3.10.1",
+    "chai": "^4.2.0",
     "eslint": "^7.7.0",
     "eslint-config-prettier": "^6.11.0",
     "eslint-plugin-prettier": "^3.1.4",
     "mocha": "^8.0.1",
+    "mochawesome": "^6.1.1",
+    "nyc": "^15.1.0",
     "prettier": "^2.1.1",
+    "ts-node": "^9.0.0",
     "typescript": "^4.0.2"
   }
 }
