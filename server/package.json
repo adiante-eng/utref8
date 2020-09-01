@@ -12,8 +12,12 @@
     "url": "https://github.com/Microsoft/vscode-extension-samples"
   },
   "dependencies": {
+    "nanoid": "^3.1.12",
     "vscode-languageserver": "^6.1.1",
     "vscode-languageserver-textdocument": "^1.0.1"
   },
-  "scripts": {}
+  "scripts": {},
+  "devDependencies": {
+    "tiny-typed-emitter": "^2.0.2"
+  }
 }

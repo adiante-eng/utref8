@@ -1,6 +1,6 @@
 import * as lsp from "vscode-languageserver";
 
-export interface LanguageProvider {
+export interface LanguageFeatures {
   readonly languageId: string;
 
   provideCodeAction?: lsp.ServerRequestHandler<

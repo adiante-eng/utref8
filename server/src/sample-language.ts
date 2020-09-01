@@ -1,6 +1,5 @@
 import * as lsp from "vscode-languageserver";
-import { LanguageProvider } from "./language-provider";
-import { createLanguageServer, LanguageServer } from "./language-server";
+import { createLanguageServer, LanguageFeatures, LanguageServer } from "./lsp";
 
 interface SampleLanguageConfiguration {
   maxNumberOfProblems: number;
@@ -8,7 +7,7 @@ interface SampleLanguageConfiguration {
 
 const defaultSettings: SampleLanguageConfiguration = { maxNumberOfProblems: 3 };
 
-export class SampleLanguage implements LanguageProvider {
+export class SampleLanguage implements LanguageFeatures {
   private readonly server: LanguageServer<SampleLanguageConfiguration>;
   readonly languageId = "languageServerExample";
 

@@ -1,21 +1,22 @@
 import * as lsp from "vscode-languageserver";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { LanguageProvider } from "./language-provider";
-import { TextDocuments } from "./text-documents";
+import { Diagnostics, LanguageFeatures } from ".";
+import { TextFiles } from "../text-files/text-files";
 
 export interface LanguageServer<S> {
-  getTextDocument(uri: string): TextDocument | undefined;
-  getSettings(uri: string): Thenable<S>;
-  readonly hasConfigurationCapability: boolean;
-  readonly hasDiagnosticRelatedInformationCapability: boolean;
-  readonly hasWorkspaceFolderCapability: boolean;
-  onDocumentChange(handler: (uri: string) => void): void;
-  sendDiagnostics(params: lsp.PublishDiagnosticsParams): void;
+  readonly diagnostics: Diagnostics;
+  readonly textSync: TextFiles;
+  readonly settings: Settings<S>;
   start(): void;
 }
 
+export interface Settings<S> {
+  getGlobal(): Thenable<S>;
+  getScoped(uri: string): Thenable<S>;
+  readonly isConfigurable: boolean;
+}
+
 export function createLanguageServer<S>(
-  provider: LanguageProvider,
+  provider: LanguageFeatures,
   globalSettings?: S
 ): LanguageServer<S> {
   return new LanguageServerImpl(provider, globalSettings);
@@ -24,14 +25,13 @@ export function createLanguageServer<S>(
 const GLOBAL_URI = "__GLOBAL__";
 
 class LanguageServerImpl<S> implements LanguageServer<S> {
-  private readonly provider: LanguageProvider;
+  private readonly provider: LanguageFeatures;
   private readonly connection: lsp.Connection;
-  private readonly capabilities: lsp.ClientCapabilities = {};
-  private readonly documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
   private readonly settings: Map<string, Thenable<S>> = new Map();
-  private readonly documentChangeHandlers: Array<(uri: string) => void> = [];
+  #hasConfigurationCapability = false;
+  #hasDiagnosticRelatedInformationCapability = false;
 
-  constructor(provider: LanguageProvider, globalSettings?: S) {
+  constructor(provider: LanguageFeatures, globalSettings?: S) {
     this.provider = provider;
     if (globalSettings) {
       this.settings.set(GLOBAL_URI, Promise.resolve(globalSettings));
@@ -110,8 +110,10 @@ class LanguageServerImpl<S> implements LanguageServer<S> {
       this.connection.onWorkspaceSymbol(this.provider.provideWorkspaceSymbol.bind(this.provider));
   }
 
-  private computeCapabilities(params: lsp.InitializeParams) {
-    Object.assign(this.capabilities, params.capabilities);
+  private computeCapabilities(client: lsp.InitializeParams) {
+    this.#hasConfigurationCapability = !!client.capabilities.workspace?.configuration;
+    this.#hasDiagnosticRelatedInformationCapability = !!client.capabilities.textDocument
+      ?.publishDiagnostics?.relatedInformation;
 
     const capabilities: lsp.ServerCapabilities = {};
     capabilities.codeActionProvider = !!this.provider.provideCodeAction;
@@ -163,7 +165,7 @@ class LanguageServerImpl<S> implements LanguageServer<S> {
     }
     capabilities.textDocumentSync = lsp.TextDocumentSyncKind.Incremental;
     capabilities.typeDefinitionProvider = !!this.provider.provideTypeDefinition;
-    capabilities.workspace = this.hasWorkspaceFolderCapability
+    capabilities.workspace = client.capabilities.workspace?.workspaceFolders
       ? {
           workspaceFolders: {
             supported: true,
@@ -201,21 +203,11 @@ class LanguageServerImpl<S> implements LanguageServer<S> {
   }
 
   get hasConfigurationCapability() {
-    return !!this.capabilities.workspace?.configuration;
+    return this.#hasConfigurationCapability;
   }
 
   get hasDiagnosticRelatedInformationCapability(): boolean {
-    return !!this.capabilities.textDocument?.publishDiagnostics?.relatedInformation;
-  }
-
-  get hasWorkspaceFolderCapability(): boolean {
-    return !!this.capabilities.workspace?.workspaceFolders;
-  }
-
-  onDocumentChange(handler: (uri: string) => void) {
-    this.documents.onDidChangeContent((event) => {
-      handler(event.document.uri);
-    });
+    return this.#hasDiagnosticRelatedInformationCapability;
   }
 
   getSettings(uri: string) {
@@ -231,10 +223,6 @@ class LanguageServerImpl<S> implements LanguageServer<S> {
       this.settings.set(uri, result);
     }
     return result;
-  }
-
-  getTextDocument(uri: string) {
-    return this.documents.get(uri);
   }
 
   sendDiagnostics(params: lsp.PublishDiagnosticsParams) {

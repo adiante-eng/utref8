@@ -2,6 +2,16 @@
 # yarn lockfile v1
 
 
+nanoid@^3.1.12:
+  version "3.1.12"
+  resolved "https://registry.yarnpkg.com/nanoid/-/nanoid-3.1.12.tgz#6f7736c62e8d39421601e4a0c77623a97ea69654"
+  integrity sha512-1qstj9z5+x491jfiC4Nelk+f8XBad7LN20PmyWINJEMRSf3wcAjAWysw1qaA8z6NSKe2sjq1hRSDpBH5paCb6A==
+
+tiny-typed-emitter@^2.0.2:
+  version "2.0.2"
+  resolved "https://registry.yarnpkg.com/tiny-typed-emitter/-/tiny-typed-emitter-2.0.2.tgz#8f28385851a627acc8a4f5e63b8c654ae75ad23f"
+  integrity sha512-mTodzBLyisJpj8tQuXOowrYHIW8548XqJHEJdqo4vw1QMV7ZOZYDZKk75/5VkYMTJTvDlUpDtJUHjOowAvs0wA==
+
 vscode-jsonrpc@^5.0.1:
   version "5.0.1"
   resolved "https://registry.yarnpkg.com/vscode-jsonrpc/-/vscode-jsonrpc-5.0.1.tgz#9bab9c330d89f43fc8c1e8702b5c36e058a01794"
