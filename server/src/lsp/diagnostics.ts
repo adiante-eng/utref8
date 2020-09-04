@@ -31,5 +31,18 @@ export interface Diagnostics {
    *
    * @param params the diagnostics to publish
    */
-  publishDiagnostics(params: lsp.PublishDiagnosticsParams): void;
+  publishDiagnostics: PublishDiagnosticsFn;
+}
+
+interface PublishDiagnosticsFn {
+  (params: lsp.PublishDiagnosticsParams): void;
+}
+
+export class DiagnosticsImpl implements Diagnostics {
+  readonly publishDiagnostics: PublishDiagnosticsFn;
+  relatedInformation = false;
+
+  constructor(publishDiagnostics: PublishDiagnosticsFn) {
+    this.publishDiagnostics = publishDiagnostics;
+  }
 }

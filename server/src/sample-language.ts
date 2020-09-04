@@ -1,5 +1,5 @@
 import * as lsp from "vscode-languageserver";
-import { createLanguageServer, LanguageFeatures, LanguageServer } from "./lsp";
+import { createLanguageServer, Diagnostics, LanguageFeatures, TextSync } from "./lsp";
 
 interface SampleLanguageConfiguration {
   maxNumberOfProblems: number;
@@ -8,13 +8,20 @@ interface SampleLanguageConfiguration {
 const defaultSettings: SampleLanguageConfiguration = { maxNumberOfProblems: 3 };
 
 export class SampleLanguage implements LanguageFeatures {
-  private readonly server: LanguageServer<SampleLanguageConfiguration>;
   readonly languageId = "languageServerExample";
 
+  private readonly diagnostics: Diagnostics;
+  private readonly textSync: TextSync;
+
   constructor() {
-    this.server = createLanguageServer(this, defaultSettings);
-    this.server.onDocumentChange(this.validateTextDocument.bind(this));
-    this.server.start();
+    const server = createLanguageServer(this);
+    this.diagnostics = server.diagnostics;
+    this.textSync = server.textSync;
+
+    server.textSync.on("didOpen", ({ textDocument: { uri } }) => this.validateTextDocument(uri));
+    server.textSync.on("didChange", ({ textDocument: { uri } }) => this.validateTextDocument(uri));
+
+    server.start();
   }
 
   provideCompletion(_params: lsp.CompletionParams) {
@@ -45,8 +52,8 @@ export class SampleLanguage implements LanguageFeatures {
 
   private async validateTextDocument(uri: string) {
     // In this simple example we get the settings for every validate run.
-    const settings = await this.server.getSettings(uri);
-    const textDocument = this.server.getTextDocument(uri);
+    const settings = defaultSettings;
+    const textDocument = await this.textSync.getTextDocument(uri);
     if (!textDocument) {
       return;
     }
@@ -68,19 +75,19 @@ export class SampleLanguage implements LanguageFeatures {
         message: `${m[0]} is all uppercase.`,
         source: "ex"
       };
-      if (this.server.hasDiagnosticRelatedInformationCapability) {
+      if (this.diagnostics.relatedInformation) {
         diagnostic.relatedInformation = [
           {
             location: {
-              uri: textDocument.uri,
-              range: Object.assign({}, diagnostic.range)
+              uri,
+              range: { ...diagnostic.range }
             },
             message: "Spelling matters"
           },
           {
             location: {
-              uri: textDocument.uri,
-              range: Object.assign({}, diagnostic.range)
+              uri,
+              range: { ...diagnostic.range }
             },
             message: "Particularly for names"
           }
@@ -88,7 +95,7 @@ export class SampleLanguage implements LanguageFeatures {
       }
       diagnostics.push(diagnostic);
     }
-    this.server.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+    this.diagnostics.publishDiagnostics({ uri, diagnostics });
   }
 }
 

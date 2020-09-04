@@ -1,235 +1,285 @@
 import * as lsp from "vscode-languageserver";
-import { Diagnostics, LanguageFeatures } from ".";
-import { TextFiles } from "../text-files/text-files";
+import {
+  Diagnostics,
+  DiagnosticsImpl,
+  LanguageFeatures,
+  TextSync,
+  TextSyncImpl,
+  Workspace,
+  WorkspaceImpl
+} from ".";
 
-export interface LanguageServer<S> {
+export interface LanguageServer<C> {
   readonly diagnostics: Diagnostics;
-  readonly textSync: TextFiles;
-  readonly settings: Settings<S>;
   start(): void;
+  stop(): void;
+  readonly textSync: TextSync;
+  readonly workspace: Workspace<C>;
 }
 
-export interface Settings<S> {
-  getGlobal(): Thenable<S>;
-  getScoped(uri: string): Thenable<S>;
-  readonly isConfigurable: boolean;
+export function createLanguageServer<C>(features: LanguageFeatures): LanguageServer<C> {
+  return new LanguageServerImpl<C>(features);
 }
 
-export function createLanguageServer<S>(
-  provider: LanguageFeatures,
-  globalSettings?: S
-): LanguageServer<S> {
-  return new LanguageServerImpl(provider, globalSettings);
-}
-
-const GLOBAL_URI = "__GLOBAL__";
-
-class LanguageServerImpl<S> implements LanguageServer<S> {
-  private readonly provider: LanguageFeatures;
+class LanguageServerImpl<C> implements LanguageServer<C> {
   private readonly connection: lsp.Connection;
-  private readonly settings: Map<string, Thenable<S>> = new Map();
-  #hasConfigurationCapability = false;
-  #hasDiagnosticRelatedInformationCapability = false;
+  private readonly features: LanguageFeatures;
+  private started = false;
+  private _diagnostics?: DiagnosticsImpl;
+  private _textSync?: TextSyncImpl;
+  private _workspace?: WorkspaceImpl<C>;
 
-  constructor(provider: LanguageFeatures, globalSettings?: S) {
-    this.provider = provider;
-    if (globalSettings) {
-      this.settings.set(GLOBAL_URI, Promise.resolve(globalSettings));
-    }
+  constructor(features: LanguageFeatures) {
     this.connection = lsp.createConnection(lsp.ProposedFeatures.all);
-    this.connection.onInitialize(this.computeCapabilities.bind(this));
-    this.connection.onInitialized(this.registerForConfigurationChanges.bind(this));
-    this.registerProvider();
-    this.setupConfiguration();
+    this.features = features;
+
+    // General Messages
+    this.connection.onInitialize(this.initialize.bind(this));
+    this.connection.onInitialized((_params) => {
+      if (this._workspace && this._workspace.isConfigurable) {
+        this.connection.client.register(lsp.DidChangeConfigurationNotification.type, undefined);
+      }
+    });
+
+    this.connection.onShutdown(this.shutdown.bind(this));
+    this.connection.onExit(this.exit.bind(this));
+
+    // Language Features
+    registerLanguageFeatures(features, this.connection);
   }
 
-  private registerProvider() {
-    !!this.provider.provideCodeAction &&
-      this.connection.onCodeAction(this.provider.provideCodeAction.bind(this.provider));
-    !!this.provider.provideCodeLens &&
-      this.connection.onCodeLens(this.provider.provideCodeLens.bind(this.provider));
-    !!this.provider.provideCodeLensResolve &&
-      this.connection.onCodeLensResolve(this.provider.provideCodeLensResolve.bind(this.provider));
-    !!this.provider.provideColorPresentation &&
-      this.connection.onColorPresentation(this.provider.provideColorPresentation.bind(this.provider));
-    !!this.provider.provideCompletion &&
-      this.connection.onCompletion(this.provider.provideCompletion.bind(this.provider));
-    !!this.provider.provideCompletionResolve &&
-      this.connection.onCompletionResolve(this.provider.provideCompletionResolve.bind(this.provider));
-    !!this.provider.provideDeclaration &&
-      this.connection.onDeclaration(this.provider.provideDeclaration.bind(this.provider));
-    !!this.provider.provideDefinition &&
-      this.connection.onDefinition(this.provider.provideDefinition.bind(this.provider));
-    !!this.provider.provideDocumentColor &&
-      this.connection.onDocumentColor(this.provider.provideDocumentColor.bind(this.provider));
-    !!this.provider.provideDocumentFormatting &&
-      this.connection.onDocumentFormatting(this.provider.provideDocumentFormatting.bind(this.provider));
-    !!this.provider.provideDocumentHighlight &&
-      this.connection.onDocumentHighlight(this.provider.provideDocumentHighlight.bind(this.provider));
-    !!this.provider.provideDocumentLinkResolve &&
-      this.connection.onDocumentLinkResolve(
-        this.provider.provideDocumentLinkResolve.bind(this.provider)
-      );
-    !!this.provider.provideDocumentLinks &&
-      this.connection.onDocumentLinks(this.provider.provideDocumentLinks.bind(this.provider));
-    !!this.provider.provideDocumentOnTypeFormatting &&
-      this.connection.onDocumentOnTypeFormatting(
-        this.provider.provideDocumentOnTypeFormatting.handler.bind(this.provider)
-      );
-    !!this.provider.provideDocumentRangeFormatting &&
-      this.connection.onDocumentRangeFormatting(
-        this.provider.provideDocumentRangeFormatting.bind(this.provider)
-      );
-    !!this.provider.provideDocumentSymbol &&
-      this.connection.onDocumentSymbol(this.provider.provideDocumentSymbol.bind(this.provider));
-    !!this.provider.provideExecuteCommand &&
-      this.connection.onExecuteCommand(this.provider.provideExecuteCommand.handler.bind(this.provider));
-    !!this.provider.provideFoldingRanges &&
-      this.connection.onFoldingRanges(this.provider.provideFoldingRanges.bind(this.provider));
-    !!this.provider.provideHover &&
-      this.connection.onHover(this.provider.provideHover.bind(this.provider));
-    !!this.provider.provideImplementation &&
-      this.connection.onImplementation(this.provider.provideImplementation.bind(this.provider));
-    !!this.provider.providePrepareRename &&
-      this.connection.onPrepareRename(this.provider.providePrepareRename.bind(this.provider));
-    !!this.provider.provideReferences &&
-      this.connection.onReferences(this.provider.provideReferences.bind(this.provider));
-    !!this.provider.provideRenameRequest &&
-      this.connection.onRenameRequest(this.provider.provideRenameRequest.bind(this.provider));
-    !!this.provider.provideSelectionRanges &&
-      this.connection.onSelectionRanges(this.provider.provideSelectionRanges.bind(this.provider));
-    !!this.provider.provideSignatureHelp &&
-      this.connection.onSignatureHelp(this.provider.provideSignatureHelp.handler.bind(this.provider));
-    !!this.provider.provideTypeDefinition &&
-      this.connection.onTypeDefinition(this.provider.provideTypeDefinition.bind(this.provider));
-    !!this.provider.provideWillSaveTextDocumentWaitUntil &&
-      this.connection.onWillSaveTextDocumentWaitUntil(
-        this.provider.provideWillSaveTextDocumentWaitUntil.bind(this.provider)
-      );
-    !!this.provider.provideWorkspaceSymbol &&
-      this.connection.onWorkspaceSymbol(this.provider.provideWorkspaceSymbol.bind(this.provider));
-  }
-
-  private computeCapabilities(client: lsp.InitializeParams) {
-    this.#hasConfigurationCapability = !!client.capabilities.workspace?.configuration;
-    this.#hasDiagnosticRelatedInformationCapability = !!client.capabilities.textDocument
-      ?.publishDiagnostics?.relatedInformation;
-
-    const capabilities: lsp.ServerCapabilities = {};
-    capabilities.codeActionProvider = !!this.provider.provideCodeAction;
-    if (this.provider.provideCodeLens) {
-      capabilities.codeLensProvider = {
-        resolveProvider: !!this.provider.provideCodeLensResolve
-      };
-    }
-    capabilities.colorProvider = !!this.provider.provideColorPresentation;
-    if (this.provider.provideCompletion) {
-      capabilities.completionProvider = {
-        resolveProvider: !!this.provider.provideCompletionResolve
-      };
-    }
-    capabilities.declarationProvider = !!this.provider.provideDeclaration;
-    capabilities.definitionProvider = !!this.provider.provideDefinition;
-    capabilities.documentFormattingProvider = !!this.provider.provideDocumentFormatting;
-    capabilities.documentHighlightProvider = !!this.provider.provideDocumentHighlight;
-    if (this.provider.provideDocumentLinks) {
-      capabilities.documentLinkProvider = {
-        resolveProvider: !!this.provider.provideDocumentLinkResolve
-      };
-    }
-    if (this.provider.provideDocumentOnTypeFormatting) {
-      capabilities.documentOnTypeFormattingProvider = {
-        firstTriggerCharacter: this.provider.provideDocumentOnTypeFormatting.firstTriggerCharacter,
-        moreTriggerCharacter: this.provider.provideDocumentOnTypeFormatting.moreTriggerCharacter
-      };
-    }
-    capabilities.documentRangeFormattingProvider = !!this.provider.provideDocumentRangeFormatting;
-    capabilities.documentSymbolProvider = !!this.provider.provideDocumentSymbol;
-    if (this.provider.provideExecuteCommand) {
-      capabilities.executeCommandProvider = {
-        commands: this.provider.provideExecuteCommand.commands
-      };
-    }
+  private initialize(client: lsp.InitializeParams) {
+    const capabilities = computeFeatureCapabilities(this.features);
     capabilities.experimental = false;
-    capabilities.foldingRangeProvider = !!this.provider.provideFoldingRanges;
-    capabilities.hoverProvider = !!this.provider.provideHover;
-    capabilities.implementationProvider = !!this.provider.provideImplementation;
-    capabilities.referencesProvider = !!this.provider.provideReferences;
-    capabilities.renameProvider = !!this.provider.provideRenameRequest;
-    capabilities.selectionRangeProvider = !!this.provider.provideSelectionRanges;
-    if (this.provider.provideSignatureHelp) {
-      capabilities.signatureHelpProvider = {
-        triggerCharacters: this.provider.provideSignatureHelp.triggerCharacters,
-        retriggerCharacters: this.provider.provideSignatureHelp.retriggerCharacters
+
+    if (this._diagnostics) {
+      this._diagnostics.relatedInformation = !!client.capabilities.textDocument?.publishDiagnostics
+        ?.relatedInformation;
+    }
+
+    if (this._textSync) {
+      capabilities.textDocumentSync = {
+        openClose: true,
+        change: lsp.TextDocumentSyncKind.Incremental,
+        willSave: true,
+        willSaveWaitUntil: !!this.features.provideWillSaveTextDocumentWaitUntil,
+        save: {
+          includeText: true
+        }
       };
     }
-    capabilities.textDocumentSync = lsp.TextDocumentSyncKind.Incremental;
-    capabilities.typeDefinitionProvider = !!this.provider.provideTypeDefinition;
-    capabilities.workspace = client.capabilities.workspace?.workspaceFolders
-      ? {
-          workspaceFolders: {
-            supported: true,
-            changeNotifications: this.provider.languageId
+
+    if (this._workspace && client.capabilities.workspace?.configuration) {
+      const loadConfiguration = (uri?: string) => {
+        return this.connection.workspace.getConfiguration({
+          scopeUri: uri,
+          section: this.features.languageId
+        }) as Promise<C | undefined>;
+      };
+      this._workspace.loadConfiguration = loadConfiguration;
+      this.connection.onDidChangeConfiguration(
+        this._workspace.didChangeConfiguration.bind(this._workspace)
+      );
+    }
+
+    if ((this._workspace || this._textSync) && client.capabilities.workspace?.workspaceFolders) {
+      const handler = !this._textSync
+        ? (e: lsp.WorkspaceFoldersChangeEvent) => {
+            this._workspace!.didChangeWorkspaceFolder(e);
           }
+        : !this._workspace
+        ? (e: lsp.WorkspaceFoldersChangeEvent) => {
+            this._textSync!.didChangeWorkspaceFolder(e);
+          }
+        : (e: lsp.WorkspaceFoldersChangeEvent) => {
+            this._workspace!.didChangeWorkspaceFolder(e);
+            this._textSync!.didChangeWorkspaceFolder(e);
+          };
+      this.connection.workspace.onDidChangeWorkspaceFolders(handler);
+      capabilities.workspace = {
+        workspaceFolders: {
+          supported: true,
+          changeNotifications: this.features.languageId
         }
-      : undefined;
-    capabilities.workspaceSymbolProvider = !!this.provider.provideWorkspaceSymbol;
+      };
+    }
 
     return { capabilities };
   }
 
-  private registerForConfigurationChanges() {
-    if (this.hasConfigurationCapability) {
-      this.connection.client.register(lsp.DidChangeConfigurationNotification.type, undefined);
-    }
+  private shutdown() {
+    console.log("Shutdown...");
   }
 
-  private setupConfiguration() {
-    this.connection.onDidChangeConfiguration((change) => {
-      let globalSettings = this.settings.get(GLOBAL_URI);
-      if (this.hasConfigurationCapability) {
-        // Reset all cached document settings
-        this.settings.clear();
-      } else {
-        const changed = <S>change.settings[this.provider.languageId];
-        if (changed) {
-          globalSettings = Promise.resolve(changed);
-        }
+  private exit() {
+    console.log("Exit...");
+  }
+
+  get diagnostics(): Diagnostics {
+    if (!this._diagnostics) {
+      if (this.started) {
+        throw new Error(
+          "The diagnostics must be accessed before starting the server, in order to provide auto-configuration"
+        );
       }
-      if (globalSettings) {
-        this.settings.set(GLOBAL_URI, globalSettings);
-      }
-    });
-  }
-
-  get hasConfigurationCapability() {
-    return this.#hasConfigurationCapability;
-  }
-
-  get hasDiagnosticRelatedInformationCapability(): boolean {
-    return this.#hasDiagnosticRelatedInformationCapability;
-  }
-
-  getSettings(uri: string) {
-    if (!this.hasConfigurationCapability) {
-      return this.settings.get(GLOBAL_URI)!;
+      this._diagnostics = new DiagnosticsImpl(this.connection.sendDiagnostics.bind(this.connection));
     }
-    let result = this.settings.get(uri);
-    if (!result) {
-      result = this.connection.workspace.getConfiguration({
-        scopeUri: uri,
-        section: this.provider.languageId
-      });
-      this.settings.set(uri, result);
-    }
-    return result;
-  }
-
-  sendDiagnostics(params: lsp.PublishDiagnosticsParams) {
-    this.connection.sendDiagnostics(params);
+    return this._diagnostics;
   }
 
   start() {
+    this.started = true;
     this.connection.listen();
   }
+
+  stop() {
+    this.connection.dispose();
+  }
+
+  get textSync(): TextSync {
+    if (!this._textSync) {
+      if (this.started) {
+        throw new Error(
+          "The textSync must be accessed before starting the server, in order to provide auto-configuration"
+        );
+      }
+      const textSync = new TextSyncImpl({
+        applyEdit: this.connection.workspace.applyEdit.bind(this.connection.workspace),
+        getTextDocument: undefined,
+        listTextDocuments: undefined
+      });
+      this.connection.onDidOpenTextDocument(textSync.didOpen.bind(textSync));
+      this.connection.onDidChangeTextDocument(textSync.didChange.bind(textSync));
+      this.connection.onWillSaveTextDocument(textSync.willSave.bind(textSync));
+      this.connection.onDidSaveTextDocument(textSync.didSave.bind(textSync));
+      this.connection.onDidCloseTextDocument(textSync.didClose.bind(textSync));
+      this._textSync = textSync;
+    }
+    return this._textSync;
+  }
+
+  get workspace(): Workspace<C> {
+    if (!this._workspace) {
+      if (this.started) {
+        throw new Error(
+          "The workspace must be accessed before starting the server, in order to provide auto-configuration"
+        );
+      }
+      this._workspace = new WorkspaceImpl<C>(this.features.languageId);
+      this.connection.onDidChangeWatchedFiles(
+        this._workspace.didChangeWatchedFiles.bind(this._workspace)
+      );
+    }
+    return this._workspace;
+  }
+}
+
+function computeFeatureCapabilities(features: LanguageFeatures): lsp.ServerCapabilities {
+  const capabilities: lsp.ServerCapabilities = {};
+  capabilities.codeActionProvider = !!features.provideCodeAction;
+  if (features.provideCodeLens) {
+    capabilities.codeLensProvider = {
+      resolveProvider: !!features.provideCodeLensResolve
+    };
+  }
+  capabilities.colorProvider = !!features.provideColorPresentation;
+  if (features.provideCompletion) {
+    capabilities.completionProvider = {
+      resolveProvider: !!features.provideCompletionResolve
+    };
+  }
+  capabilities.declarationProvider = !!features.provideDeclaration;
+  capabilities.definitionProvider = !!features.provideDefinition;
+  capabilities.documentFormattingProvider = !!features.provideDocumentFormatting;
+  capabilities.documentHighlightProvider = !!features.provideDocumentHighlight;
+  if (features.provideDocumentLinks) {
+    capabilities.documentLinkProvider = {
+      resolveProvider: !!features.provideDocumentLinkResolve
+    };
+  }
+  if (features.provideDocumentOnTypeFormatting) {
+    capabilities.documentOnTypeFormattingProvider = {
+      firstTriggerCharacter: features.provideDocumentOnTypeFormatting.firstTriggerCharacter,
+      moreTriggerCharacter: features.provideDocumentOnTypeFormatting.moreTriggerCharacter
+    };
+  }
+  capabilities.documentRangeFormattingProvider = !!features.provideDocumentRangeFormatting;
+  capabilities.documentSymbolProvider = !!features.provideDocumentSymbol;
+  if (features.provideExecuteCommand) {
+    capabilities.executeCommandProvider = {
+      commands: features.provideExecuteCommand.commands
+    };
+  }
+  capabilities.foldingRangeProvider = !!features.provideFoldingRanges;
+  capabilities.hoverProvider = !!features.provideHover;
+  capabilities.implementationProvider = !!features.provideImplementation;
+  capabilities.referencesProvider = !!features.provideReferences;
+  capabilities.renameProvider = !!features.provideRenameRequest;
+  capabilities.selectionRangeProvider = !!features.provideSelectionRanges;
+  if (features.provideSignatureHelp) {
+    capabilities.signatureHelpProvider = {
+      triggerCharacters: features.provideSignatureHelp.triggerCharacters,
+      retriggerCharacters: features.provideSignatureHelp.retriggerCharacters
+    };
+  }
+  capabilities.typeDefinitionProvider = !!features.provideTypeDefinition;
+  capabilities.workspaceSymbolProvider = !!features.provideWorkspaceSymbol;
+
+  return capabilities;
+}
+
+function registerLanguageFeatures(features: LanguageFeatures, connection: lsp.Connection) {
+  !!features.provideCodeAction && connection.onCodeAction(features.provideCodeAction.bind(features));
+  !!features.provideCodeLens && connection.onCodeLens(features.provideCodeLens.bind(features));
+  !!features.provideCodeLensResolve &&
+    connection.onCodeLensResolve(features.provideCodeLensResolve.bind(features));
+  !!features.provideColorPresentation &&
+    connection.onColorPresentation(features.provideColorPresentation.bind(features));
+  !!features.provideCompletion && connection.onCompletion(features.provideCompletion.bind(features));
+  !!features.provideCompletionResolve &&
+    connection.onCompletionResolve(features.provideCompletionResolve.bind(features));
+  !!features.provideDeclaration && connection.onDeclaration(features.provideDeclaration.bind(features));
+  !!features.provideDefinition && connection.onDefinition(features.provideDefinition.bind(features));
+  !!features.provideDocumentColor &&
+    connection.onDocumentColor(features.provideDocumentColor.bind(features));
+  !!features.provideDocumentFormatting &&
+    connection.onDocumentFormatting(features.provideDocumentFormatting.bind(features));
+  !!features.provideDocumentHighlight &&
+    connection.onDocumentHighlight(features.provideDocumentHighlight.bind(features));
+  !!features.provideDocumentLinkResolve &&
+    connection.onDocumentLinkResolve(features.provideDocumentLinkResolve.bind(features));
+  !!features.provideDocumentLinks &&
+    connection.onDocumentLinks(features.provideDocumentLinks.bind(features));
+  !!features.provideDocumentOnTypeFormatting &&
+    connection.onDocumentOnTypeFormatting(
+      features.provideDocumentOnTypeFormatting.handler.bind(features)
+    );
+  !!features.provideDocumentRangeFormatting &&
+    connection.onDocumentRangeFormatting(features.provideDocumentRangeFormatting.bind(features));
+  !!features.provideDocumentSymbol &&
+    connection.onDocumentSymbol(features.provideDocumentSymbol.bind(features));
+  !!features.provideExecuteCommand &&
+    connection.onExecuteCommand(features.provideExecuteCommand.handler.bind(features));
+  !!features.provideFoldingRanges &&
+    connection.onFoldingRanges(features.provideFoldingRanges.bind(features));
+  !!features.provideHover && connection.onHover(features.provideHover.bind(features));
+  !!features.provideImplementation &&
+    connection.onImplementation(features.provideImplementation.bind(features));
+  !!features.providePrepareRename &&
+    connection.onPrepareRename(features.providePrepareRename.bind(features));
+  !!features.provideReferences && connection.onReferences(features.provideReferences.bind(features));
+  !!features.provideRenameRequest &&
+    connection.onRenameRequest(features.provideRenameRequest.bind(features));
+  !!features.provideSelectionRanges &&
+    connection.onSelectionRanges(features.provideSelectionRanges.bind(features));
+  !!features.provideSignatureHelp &&
+    connection.onSignatureHelp(features.provideSignatureHelp.handler.bind(features));
+  !!features.provideTypeDefinition &&
+    connection.onTypeDefinition(features.provideTypeDefinition.bind(features));
+  !!features.provideWillSaveTextDocumentWaitUntil &&
+    connection.onWillSaveTextDocumentWaitUntil(
+      features.provideWillSaveTextDocumentWaitUntil.bind(features)
+    );
+  !!features.provideWorkspaceSymbol &&
+    connection.onWorkspaceSymbol(features.provideWorkspaceSymbol.bind(features));
 }
